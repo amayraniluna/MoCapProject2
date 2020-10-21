@@ -36,6 +36,7 @@
 		1058C7A1FEA54F0111CA2CBB /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = /System/Library/Frameworks/Cocoa.framework; sourceTree = "<absolute>"; };
 		22893B66250813B1006F535E /* Squares.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Squares.h; sourceTree = "<group>"; };
 		22A567C22501A67B00689D76 /* CinderOpenCV.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = CinderOpenCV.h; path = ../../../Desktop/CinderOpenCV.h; sourceTree = "<group>"; };
+		22B41EAD253F606F00534817 /* Blob.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Blob.h; sourceTree = "<group>"; };
 		29B97324FDCFA39411CA2CEA /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = /System/Library/Frameworks/AppKit.framework; sourceTree = "<absolute>"; };
 		29B97325FDCFA39411CA2CEA /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = /System/Library/Frameworks/Foundation.framework; sourceTree = "<absolute>"; };
 		2D1BF4D8F9464071AD4EA8B5 /* MoCapProject4_Prefix.pch */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MoCapProject4_Prefix.pch; sourceTree = "<group>"; };
@@ -147,6 +148,7 @@
 		29B97315FDCFA39411CA2CEA /* Headers */ = {
 			isa = PBXGroup;
 			children = (
+				22B41EAD253F606F00534817 /* Blob.h */,
 				22A567C22501A67B00689D76 /* CinderOpenCV.h */,
 				E544AE70C7034328827E276E /* Resources.h */,
 				2D1BF4D8F9464071AD4EA8B5 /* MoCapProject4_Prefix.pch */,

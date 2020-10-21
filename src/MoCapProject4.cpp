@@ -1,20 +1,22 @@
 /*
  
  Programmer: Amayrani Luna
- Date: 10/15/20
- Notes: Demonstration of sending OSC processing and creating artistic application using our previous code
+ Date: c2020
+ Notes: Demonstration of blob detection
  Purpose/Description:
  
- This program sends frame differencing values (such as the (x,y) values of a square where movement is occuring and the max number of pixels in a square) to another program.
+ This program demonstrates simple blob detection.
  
  Uses:
  
- osc::Sender -- sends OSC messages from one program to another (incl. those running on another computer)
- 
- Note: still does frame-differencing.
+ See brief tutorial here:
+ https://www.learnopencv.com/blob-detection-using-opencv-python-c/
+
+ Output/Drawing:
+ Draws the result of simple blob detection.
  */
 
-
+//#include <opencv2/opencv.hpp>
 #include <opencv2/core/core.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/video/tracking.hpp>
@@ -23,7 +25,7 @@
 #include "opencv2/imgproc.hpp"
 #include "opencv2/videoio.hpp"
 #include <opencv2/video.hpp>
-
+#include "opencv2/features2d.hpp" //new include for this project
 
 #include "cinder/app/App.h"
 #include "cinder/app/RendererGl.h"
@@ -31,135 +33,70 @@
 #include "cinder/Capture.h" //needed for capture
 #include "cinder/Log.h" //needed to log errors
 
+//#include "Osc.h" //add to send OSC
 
-#include "Osc.h" //add to send OSC
-
-#include <math.h>
 
 #include "CinderOpenCV.h"
-#include "Squares.h"
+
+#include "Blob.h"
+
+#define SAMPLE_WINDOW_MOD 300
+#define MAX_FEATURES 300
+#define WINDOW_WIDTH 640
+#define WINDOW_HEIGHT 480
 
 using namespace ci;
 using namespace ci::app;
 using namespace std;
 
-//for networking
-#define LOCALPORT 8887 //we just bind here to send.
-#define DESTHOST "127.0.0.1" //this is sending to our OWN computer's IP address
-#define DESTPORT 8888 //this is the port we are sending to -- take note. This will have to match in the next code.
-
-//set up our OSC addresses
-#define WHERE_OSCADDRESS "/MakeItArt/Where"
-#define MAXSUM_OSCADDRESS "/MakeItArt/MaxSum"
-
-
-class BlobDetectionApp : public App {
-  public:
-    BlobDetectionApp();
+class BlobTrackingApp : public App {
+public:
     void setup() override;
+//    void mouseDown( MouseEvent event ) override;
     void keyDown( KeyEvent event ) override;
-    void mouseDrag( MouseEvent event) override;
-    void mouseDown( MouseEvent event) override;
-    void mouseUp( MouseEvent event) override;
+    
     void update() override;
     void draw() override;
     
-
-  protected:
-    CaptureRef                 mCapture;
-    gl::TextureRef             mTexture;
+protected:
+    CaptureRef                 mCapture; //the camera capture object
+    gl::TextureRef             mTexture; //current camera frame in opengl format
     
-    //for framedifferencing
-    cv::Mat                    mPrevFrame;
-    cv::Mat                    mFrameDifference;
-    ci::SurfaceRef             mSurface;
-    SquaresFrameDiff           mFDiffSquare;
+    SurfaceRef                  mSurface; //current camera frame in cinder format
     
-    //Sending OSC
-    osc::SenderUdp                mSender; //sends the OSC via the UDP protocol
-    void sendOSC(std::string addr, float x, float y); //sending the OSC values
-    void sendOSC(std::string addr, float maxSum);//just one -- this is inelegant but effective for now
+    cv::Ptr<cv::SimpleBlobDetector>     mBlobDetector; //the object that does the blob detection
+    std::vector<cv::KeyPoint>   mKeyPoints; //the center points of the blobs (current, previous, and before that) & how big they are.
+    std::vector<cv::KeyPoint>   mPrevKeyPoints; //saves previous key points
+    
+    cv::Mat                     mCurFrame, mBackgroundSubtracted; //current frame & frame with background subtracted in OCV format
+    cv::Mat                     mSavedFrame; //the frame saved for use for simple background subtraction
+    
+    cv::Ptr<cv::BackgroundSubtractor> mBackgroundSubtract; //the background subtraction object that does subtractin'
+    
+    std::vector<Blob>           mBlobs; ///the blobs found in the current frame
+    
+    std::vector<int> mMapPrevToCurKeypoints; //index# -> mKeyPoints index#
+                                            //index data -> index# of the mPrevKeyPoint
+    
+    enum BackgroundSubtractionState {NONE=0, OPENCV=2, SAVEDFRAME=3};
+    BackgroundSubtractionState mUseBackgroundSubtraction;
+    
+    void blobDetection(BackgroundSubtractionState useBackground); //does our blob detection
+    void createBlobs(); //creates the blob objects for each keypoint
+    void blobTracking();
+    void updateBlobList();
+    
+    int newBlobID; //the id to assign a new blob.
 
-    void frameDifference(cv::Mat &outputImg);
+    
 };
 
 
-
-
-BlobDetectionApp::BlobDetectionApp() : mSender(LOCALPORT, DESTHOST, DESTPORT) //initializing our class variables
+void BlobTrackingApp::setup()
 {
-    
-}
-
-
-
-//sets the mouse drag values
-void BlobDetectionApp::mouseDrag( MouseEvent event)
-{
-    //add functionality later
-}
-
-
-
-//sets the mouse down values
-void BlobDetectionApp::mouseDown( MouseEvent event)
-{
-     //add functionality later
-}
-
-
-
-//sets the mouse up values
-void BlobDetectionApp::mouseUp( MouseEvent event)
-{
-     //add functionality later
-}
-
-
-
-//addr = OSC address, x&y = coordinate values from Squares class
-void BlobDetectionApp::sendOSC(std::string addr, float x, float y) //sending the OSC values
-{
-    osc::Message msg;
-    msg.setAddress(addr); //sets the address
-    
-    msg.append(x);
-    msg.append(y);
-    
-    mSender.send(msg);
-}
-
-
-
-//addr = OSC address, maxSum = max value of pixels from Squares class
-void BlobDetectionApp::sendOSC(std::string addr, float maxSum) //sending the OSC values
-{
-    osc::Message msg;
-    msg.setAddress(addr); //sets the address
-    
-    msg.append(maxSum);
-    
-    mSender.send(msg);
-}
-
-
-
-//initialization
-void BlobDetectionApp::setup()
-{
-    //set up our OSC sender and bind it to our local port
-    try{
-        mSender.bind();
-    }
-    catch( osc::Exception &e)
-    {
-        CI_LOG_E( "Error binding" << e.what() << " val: " << e.value() );
-        quit();
-    }
-    
     //set up our camera
     try {
-        mCapture = Capture::create(640, 480); //first default camera
+        mCapture = Capture::create(WINDOW_WIDTH, WINDOW_HEIGHT); //first default camera
         mCapture->start();
     }
     catch( ci::Exception &exc)
@@ -167,121 +104,260 @@ void BlobDetectionApp::setup()
         CI_LOG_EXCEPTION( "Failed to init capture ", exc );
     }
     
-    mPrevFrame.data = NULL;
-    mFrameDifference.data = NULL;
+    //setup the blob detector
+    // Setup SimpleBlobDetector parameters.
+    cv::SimpleBlobDetector::Params params;
+    
+    // Change thresholds
+    //    params.minThreshold = 10;
+    //    params.maxThreshold = 200;
+    
+    // Filter by Circularity - how circular
+    params.filterByCircularity = false;
+    params.maxCircularity = 0.2;
+    
+    // Filter by Convexity -- how convex
+    params.filterByConvexity = false;
+    params.minConvexity = 0.87;
+    
+    // Filter by Inertia ?
+    params.filterByInertia = false;
+    params.minInertiaRatio = 0.01;
+    
+    params.minDistBetweenBlobs = 100.0f; //WAS ORIGINALLY 300.0f
+    
+    params.filterByColor = false;
+    
+    params.filterByArea = true;
+    params.minArea = 200.0f;
+    params.maxArea = 1000.0f;
+    
+    //create the blob detector with the above parameters
+    mBlobDetector = cv::SimpleBlobDetector::create(params);
+    
+    //our first available id is 0
+    newBlobID = 0;
+    
+    //use MOG2 -- guassian mixture algorithm to do background subtraction
+    mBackgroundSubtract = cv::createBackgroundSubtractorMOG2();
+    
+    mUseBackgroundSubtraction = BackgroundSubtractionState::NONE;
+    mBackgroundSubtracted.data = NULL;
+    
 }
 
-
-
-
-void BlobDetectionApp::keyDown( KeyEvent event )
+void BlobTrackingApp::keyDown( KeyEvent event )
 {
-    //TODO: save the current frame as the background image when user hits a key
-    
-    //eg:
-    if(event.getChar() == ' ')
+    if( event.getChar() == '1')
     {
-        //TODO: do a thing. Like save the current frame.
+        mUseBackgroundSubtraction = BackgroundSubtractionState::NONE;
+    }
+    if( event.getChar() == '2')
+    {
+        mUseBackgroundSubtraction = BackgroundSubtractionState::OPENCV;
+    }
+    if( event.getChar() == '3')
+    {
+        mUseBackgroundSubtraction = BackgroundSubtractionState::SAVEDFRAME;
+        std::cout << "Saving current frame as background!\n";
+        mSavedFrame = mCurFrame;
     }
 }
 
-
-
-
-void BlobDetectionApp::update()
+//this function detects the blobs.
+void BlobTrackingApp::blobDetection(BackgroundSubtractionState useBackground = BackgroundSubtractionState::NONE)
 {
-    //does frame-differencing stuff
+    if(!mSurface) return;
+    
+    cv::Mat frame;
+    
+    //using the openCV background subtraction
+    if(useBackground == BackgroundSubtractionState::OPENCV)
+    {
+        mBackgroundSubtract->apply(mCurFrame, mBackgroundSubtracted);
+        frame = mBackgroundSubtracted;
+    }
+    else if( useBackground == BackgroundSubtractionState::SAVEDFRAME )
+    {
+        if(mSavedFrame.data)
+        {
+            cv::Mat outFrame;
+            
+            //use frame-differencing to subtract the background
+            cv::GaussianBlur(mCurFrame, outFrame, cv::Size(11,11), 0);
+            cv::GaussianBlur(mSavedFrame, mBackgroundSubtracted, cv::Size(11,11), 0);
+            cv::absdiff(outFrame, mBackgroundSubtracted, mBackgroundSubtracted);
+            
+            cv::threshold(mBackgroundSubtracted, mBackgroundSubtracted, 25, 255, cv::THRESH_BINARY);
+            
+            frame = mBackgroundSubtracted;
+        }
+        else{
+            std::cerr << "No background frame has been saved!\n"; //the way the program is designed, this should happen
+        }
+    }
+    else
+    {
+        frame = mCurFrame;
+    }
+    
+    //saving curr mKeyPoints into mPrevKeyPoints
+    mPrevKeyPoints.clear();
+    mPrevKeyPoints = mKeyPoints;
+    
+    //note the parameters: the frame that you would like to detect the blobs in - an input frame
+    //& 2nd, the output -- a vector of points, the center points of each blob.
+    mBlobDetector->detect(frame, mKeyPoints);
+}
+
+void BlobTrackingApp::update()
+{
     if(mCapture && mCapture->checkNewFrame()) //is there a new frame???? (& did camera get created?)
     {
         mSurface = mCapture->getSurface();
-
+        
         if(! mTexture)
             mTexture = gl::Texture::create(*mSurface);
         else
             mTexture->update(*mSurface);
-        
-        //do the frame-differencing
-        frameDifference(mFrameDifference);
     }
+    if(!mSurface) return; //we do nothing if there is no new frame
     
-    //send the OSC re: frameDiff values
-    //& normalize the positions to 0. to 1. for easy scaling in processing program
-    sendOSC(WHERE_OSCADDRESS, (float)mFDiffSquare.getMaxX()/(float)getWindowWidth(), (float)mFDiffSquare.getMaxY()/(float)getWindowHeight());
-    sendOSC(MAXSUM_OSCADDRESS, mFDiffSquare.getHighestSum());
+    mCurFrame = toOcv(Channel(*mSurface));
+    
+    
+    //update all our blob info
+    blobDetection(mUseBackgroundSubtraction);
+    
+    
+    blobTracking();
+    updateBlobList();
+    
+    //create blob objects from keypoints
+    //createBlobs();
 }
 
 
-
-
-//find the difference between 2 frames + some useful image processing
-void BlobDetectionApp::frameDifference(cv::Mat &outputImg)
+//filling in map
+void BlobTrackingApp::blobTracking()
 {
-    outputImg.data = NULL;
-    if(!mSurface) return;
-
-    //the current surface or frame in cv::Mat format
-    cv::Mat curFrame = toOcv(Channel(*mSurface));
+    mMapPrevToCurKeypoints.clear();
     
-    if(mPrevFrame.data)
+    for(int i = 0 ; i < mKeyPoints.size(); i++)//iteratoring through mKeyPoints[]
     {
+        float closestDistance = 100; // 300 from params.minDistBetweenBlobs in setup()
+        int indexOfClosestDistance = -1;
         
-        //blur --> this means that it will be resilient to a little movement
-        //params are: cv::Mat Input1,
-//                    cv::Mat Result,
-//                    cv::Size - size of blur kernel (correlates to how blurred - must be positive & odd integers),
-//                               the bigger the size, the more the blur & also the larger the sigmas the more the blur.
-//                    double size of sigma X Gaussian kernel standard deviation in X direction
-//                    double size of sigma Y Gaussian kernel standard deviation in Y direction (optional, not used)
-//      More on Gaussian blurs here: https://homepages.inf.ed.ac.uk/rbf/HIPR2/gsmooth.htm
-//      Interestingly, we can think of them as a low-pass filter in 2D -- (if you know them from audio dsp, sound)
-        cv::GaussianBlur(curFrame, curFrame, cv::Size(3,3), 0);
-
-        //find the difference
-        //params are: cv::Mat Input1, cv::Mat Input2, cv::Mat Result
-        cv::absdiff(curFrame, mPrevFrame, outputImg);
+        for(int j = 0 ; j < mPrevKeyPoints.size(); j++)//iterating through mPrevKeyPoints[]
+        {
+            //comparing the distances from mKeyPoints[i] to points in mPrevKeyPoints to see which  mPrevKeyPoint is closest to mKeyPoints[i]
+                float newDistance = ci::distance(fromOcv(mKeyPoints[i].pt), fromOcv(mPrevKeyPoints[j].pt));
+            
+                if(newDistance < closestDistance){
+                    closestDistance = newDistance;
+                    indexOfClosestDistance = j;
+                }
+        }
         
-        //take threshhold values -- think of this as image segmentation, see notes above in desc. header
-        //we will go further into image segmentation next week
-//        https://docs.opencv.org/2.4/modules/imgproc/doc/miscellaneous_transformations.html?highlight=threshold#threshold
-//    Parameters:
-//        src – input array (single-channel, 8-bit or 32-bit floating point).
-//        dst – output array of the same size and type as src.
-//        thresh – threshold value.
-//        maxval – maximum value to use with the THRESH_BINARY and THRESH_BINARY_INV thresholding types.
-//        type – thresholding type (see the details below).
-        cv::threshold(outputImg, outputImg, 50, 255, cv::THRESH_BINARY);
+            mMapPrevToCurKeypoints.push_back(indexOfClosestDistance);//if no close point was found add -1 to map
     }
     
-    mPrevFrame = curFrame;
+    std::cout << "*********************\n";
+
+    std::cout << "mMapPrevToCurKeypoints: " << mMapPrevToCurKeypoints.size() << std::endl ;
+    for(int i=0; i<mMapPrevToCurKeypoints.size(); i++){
+        std::cout <<mMapPrevToCurKeypoints[i] << "  ";
+        
+    }
+    
+    std::cout << std::endl;
+    std::cout << "mKeyPoints: "  ;
+
+    for(int k=0; k<mKeyPoints.size(); k++){
+        std::cout <<mKeyPoints[k].pt.x << "," <<mKeyPoints[k].pt.y << "  ";
+    }
+    
+    std::cout << std::endl;
+    std::cout << "mPrevKeyPoints: "  ;
+    
+    for(int k=0; k<mPrevKeyPoints.size(); k++){
+        std::cout  << mPrevKeyPoints[k].pt.x << "," <<mPrevKeyPoints[k].pt.y << " ";
+    }
+    
+    std::cout << std::endl;
+    std::cout << " KeyPoints: " << mKeyPoints.size() << std::endl;
+    std::cout << " PrevKeyPoints: " << mPrevKeyPoints.size() << std::endl;
+
+    std::cout << "*********************\n";
 }
 
 
+//updating mBlobs<>
+void BlobTrackingApp::updateBlobList()
+{
+    std::vector<Blob> mPrevBlobs = mBlobs;
+    mBlobs.clear();
+    cout << "size of mBLobs after clear: " << mBlobs.size() << endl;
+
+    for(int i = 0 ; i < mMapPrevToCurKeypoints.size() ; i++)
+    {
+        //if blob wasn't found in prev frame, create a new one
+        int data = mMapPrevToCurKeypoints[i];
+        if(data == -1){
+            mBlobs.push_back(Blob(mKeyPoints[i], newBlobID));
+            cout << "size of mBlobs after pushBack: " << mBlobs.size() << endl;
+            newBlobID++;
+        }
+            //else update location of matching blob in prev frame
+            else{
+                mBlobs.push_back(mPrevBlobs[data]);
+                mBlobs[i].update(mKeyPoints[i]);
+            }
+    }
+}
 
 
-void BlobDetectionApp::draw()
+void BlobTrackingApp::createBlobs()
+{
+    mBlobs.clear(); //create a new list of blobs each time
+    newBlobID = 0; //reset here - since we're not keeping track of blobs yet!
+    
+    for(int i=0; i<mKeyPoints.size(); i++)
+    {
+        mBlobs.push_back(Blob(mKeyPoints[i], newBlobID));
+        newBlobID++;
+    }
+}
+
+void BlobTrackingApp::draw()
 {
     gl::clear( Color( 0, 0, 0 ) );
-
+    
     gl::color( 1, 1, 1, 1 );
 
-    if( mTexture )
+    //draw what image we are detecting the blobs in
+    if( mBackgroundSubtracted.data && mUseBackgroundSubtraction )
     {
-        gl::draw( mTexture );
+        gl::draw( gl::Texture::create(fromOcv(mBackgroundSubtracted)) );
+    }
+    else if( mTexture )
+    {
+        gl::draw(mTexture);
     }
     
-    //if the frame difference isn't null, draw it.
-    if( mFrameDifference.data )
+    //draw the blobs
+    for(int i=0; i<mBlobs.size(); i++)
     {
-        gl::draw( gl::Texture::create(fromOcv(mFrameDifference) ) );
-        mFDiffSquare.drawRect(mFrameDifference);
+        mBlobs[i].draw();
     }
-    
 }
 
-
-
-CINDER_APP( BlobDetectionApp, RendererGl,
-           []( BlobDetectionApp::Settings *settings ) //note: this part is to fix the display after updating OS X 1/15/18
+CINDER_APP( BlobTrackingApp, RendererGl,
+           []( BlobTrackingApp::Settings *settings ) //note: this part is to fix the display after updating OS X 1/15/18
            {
                settings->setHighDensityDisplayEnabled( true );
-           } )
+               settings->setTitle("Blob Tracking Example");
+               settings->setWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
+               //               settings->setFrameRate(FRAMERATE); //set fastest framerate
+               } )
+
