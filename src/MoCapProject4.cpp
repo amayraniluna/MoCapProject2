@@ -18,6 +18,7 @@
 
 //#include <opencv2/opencv.hpp>
 #include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/video/tracking.hpp>
 
@@ -33,7 +34,7 @@
 #include "cinder/Capture.h" //needed for capture
 #include "cinder/Log.h" //needed to log errors
 
-//#include "Osc.h" //add to send OSC
+#include "Osc.h" //add to send OSC
 
 
 #include "CinderOpenCV.h"
@@ -49,8 +50,20 @@ using namespace ci;
 using namespace ci::app;
 using namespace std;
 
+//for networking
+#define LOCALPORT 8887 //we just bind here to send.
+#define DESTHOST "127.0.0.1" //this is sending to our OWN computer's IP address
+#define DESTPORT 8888 //this is the port we are sending to
+
+//set up our OSC addresses
+#define DOWN_OSC_ADDRESS "/MakeItArt/Down"
+#define WHERE_OSCADDRESS "/MakeItArt/Where"
+#define BLOB_OSCADDRESS "/MakeItArt/Blobs"
+
+
 class BlobTrackingApp : public App {
 public:
+    BlobTrackingApp();
     void setup() override;
 //    void mouseDown( MouseEvent event ) override;
     void keyDown( KeyEvent event ) override;
@@ -69,6 +82,7 @@ protected:
     std::vector<cv::KeyPoint>   mPrevKeyPoints; //saves previous key points
     
     cv::Mat                     mCurFrame, mBackgroundSubtracted; //current frame & frame with background subtracted in OCV format
+    
     cv::Mat                     mSavedFrame; //the frame saved for use for simple background subtraction
     
     cv::Ptr<cv::BackgroundSubtractor> mBackgroundSubtract; //the background subtraction object that does subtractin'
@@ -88,12 +102,30 @@ protected:
     
     int newBlobID; //the id to assign a new blob.
 
-    
+    //Sending OSC
+    osc::SenderUdp           mSender;
+    void sendOSC(std::string addr, float down);
+    void sendOSC(std::string addr, float x, float y);
+    void sendOSC(std::string addr, float ind, float x, float y);
 };
 
+BlobTrackingApp::BlobTrackingApp() : mSender(LOCALPORT, DESTHOST, DESTPORT) //initializing our class variables
+{
+    
+}
 
 void BlobTrackingApp::setup()
 {
+    //set up our OSC sender and bind it to our local port
+    try{
+        mSender.bind();
+    }
+    catch( osc::Exception &e)
+    {
+        CI_LOG_E( "Error binding" << e.what() << " val: " << e.value() );
+        quit();
+    }
+    
     //set up our camera
     try {
         mCapture = Capture::create(WINDOW_WIDTH, WINDOW_HEIGHT); //first default camera
@@ -103,7 +135,6 @@ void BlobTrackingApp::setup()
     {
         CI_LOG_EXCEPTION( "Failed to init capture ", exc );
     }
-    
     //setup the blob detector
     // Setup SimpleBlobDetector parameters.
     cv::SimpleBlobDetector::Params params;
@@ -129,8 +160,8 @@ void BlobTrackingApp::setup()
     params.filterByColor = false;
     
     params.filterByArea = true;
-    params.minArea = 200.0f;
-    params.maxArea = 1000.0f;
+    params.minArea = 200.0f; //ORIGINALLY 200.0f
+    params.maxArea = 900.0f; //ORIGINALLY 1000.0f
     
     //create the blob detector with the above parameters
     mBlobDetector = cv::SimpleBlobDetector::create(params);
@@ -143,7 +174,41 @@ void BlobTrackingApp::setup()
     
     mUseBackgroundSubtraction = BackgroundSubtractionState::NONE;
     mBackgroundSubtracted.data = NULL;
+
+}
+
+
+
+void BlobTrackingApp::sendOSC(std::string addr, float x, float y){
+    osc:: Message msg;
+    msg.setAddress(addr);
+
+    msg.append(x);
+    msg.append(y);
+
+    mSender.send(msg);
+}
+
+
+void BlobTrackingApp::sendOSC(std::string addr, float down){
+    osc:: Message msg;
+    msg.setAddress(addr);
+
+    msg.append(down);
+
+    mSender.send(msg);
+}
+
+
+void BlobTrackingApp::sendOSC(std::string addr, float ind, float x, float y){
+    osc:: Message msg;
+    msg.setAddress(addr);
+
+    msg.append(ind);
+    msg.append(x);
+    msg.append(y);
     
+    mSender.send(msg);
 }
 
 void BlobTrackingApp::keyDown( KeyEvent event )
@@ -189,7 +254,7 @@ void BlobTrackingApp::blobDetection(BackgroundSubtractionState useBackground = B
             cv::absdiff(outFrame, mBackgroundSubtracted, mBackgroundSubtracted);
             
             cv::threshold(mBackgroundSubtracted, mBackgroundSubtracted, 25, 255, cv::THRESH_BINARY);
-            
+           
             frame = mBackgroundSubtracted;
         }
         else{
@@ -200,7 +265,6 @@ void BlobTrackingApp::blobDetection(BackgroundSubtractionState useBackground = B
     {
         frame = mCurFrame;
     }
-    
     //saving curr mKeyPoints into mPrevKeyPoints
     mPrevKeyPoints.clear();
     mPrevKeyPoints = mKeyPoints;
@@ -222,10 +286,8 @@ void BlobTrackingApp::update()
             mTexture->update(*mSurface);
     }
     if(!mSurface) return; //we do nothing if there is no new frame
-    
     mCurFrame = toOcv(Channel(*mSurface));
-    
-    
+  
     //update all our blob info
     blobDetection(mUseBackgroundSubtraction);
     
@@ -233,9 +295,15 @@ void BlobTrackingApp::update()
     blobTracking();
     updateBlobList();
     
-    //create blob objects from keypoints
-    //createBlobs();
+    
+    //SEND OSC HERE VVV
+    for(int i = 0 ; i < mBlobs.size() ; i++){
+        sendOSC(BLOB_OSCADDRESS,(float)mBlobs[i].getBlobID(), (float)mBlobs[i].getCurrX(), (float)mBlobs[i].getCurrY());
+    }
 }
+    
+    
+
 
 
 //filling in map
@@ -261,34 +329,6 @@ void BlobTrackingApp::blobTracking()
         
             mMapPrevToCurKeypoints.push_back(indexOfClosestDistance);//if no close point was found add -1 to map
     }
-    
-    std::cout << "*********************\n";
-
-    std::cout << "mMapPrevToCurKeypoints: " << mMapPrevToCurKeypoints.size() << std::endl ;
-    for(int i=0; i<mMapPrevToCurKeypoints.size(); i++){
-        std::cout <<mMapPrevToCurKeypoints[i] << "  ";
-        
-    }
-    
-    std::cout << std::endl;
-    std::cout << "mKeyPoints: "  ;
-
-    for(int k=0; k<mKeyPoints.size(); k++){
-        std::cout <<mKeyPoints[k].pt.x << "," <<mKeyPoints[k].pt.y << "  ";
-    }
-    
-    std::cout << std::endl;
-    std::cout << "mPrevKeyPoints: "  ;
-    
-    for(int k=0; k<mPrevKeyPoints.size(); k++){
-        std::cout  << mPrevKeyPoints[k].pt.x << "," <<mPrevKeyPoints[k].pt.y << " ";
-    }
-    
-    std::cout << std::endl;
-    std::cout << " KeyPoints: " << mKeyPoints.size() << std::endl;
-    std::cout << " PrevKeyPoints: " << mPrevKeyPoints.size() << std::endl;
-
-    std::cout << "*********************\n";
 }
 
 
@@ -297,7 +337,6 @@ void BlobTrackingApp::updateBlobList()
 {
     std::vector<Blob> mPrevBlobs = mBlobs;
     mBlobs.clear();
-    cout << "size of mBLobs after clear: " << mBlobs.size() << endl;
 
     for(int i = 0 ; i < mMapPrevToCurKeypoints.size() ; i++)
     {
@@ -305,13 +344,12 @@ void BlobTrackingApp::updateBlobList()
         int data = mMapPrevToCurKeypoints[i];
         if(data == -1){
             mBlobs.push_back(Blob(mKeyPoints[i], newBlobID));
-            cout << "size of mBlobs after pushBack: " << mBlobs.size() << endl;
             newBlobID++;
         }
             //else update location of matching blob in prev frame
             else{
                 mBlobs.push_back(mPrevBlobs[data]);
-                mBlobs[i].update(mKeyPoints[i]);
+                mBlobs[i].update(mKeyPoints[i]);//adding keyPoints[i] to the Blobs KeyPoints vector (the last one is the current key point location)
             }
     }
 }
@@ -334,7 +372,7 @@ void BlobTrackingApp::draw()
     gl::clear( Color( 0, 0, 0 ) );
     
     gl::color( 1, 1, 1, 1 );
-
+  
     //draw what image we are detecting the blobs in
     if( mBackgroundSubtracted.data && mUseBackgroundSubtraction )
     {
@@ -351,6 +389,10 @@ void BlobTrackingApp::draw()
         mBlobs[i].draw();
     }
 }
+
+
+
+
 
 CINDER_APP( BlobTrackingApp, RendererGl,
            []( BlobTrackingApp::Settings *settings ) //note: this part is to fix the display after updating OS X 1/15/18
